@@ -1,0 +1,13 @@
+{
+  "itemGroup.polystirolstats": "Example Mod Tab",
+  "block.polystirolstats.example_block": "Example Block",
+  "item.polystirolstats.example_item": "Example Item",
+
+  "polystirolstats.configuration.title": "polystirol-stats Configs",
+  "polystirolstats.configuration.section.polystirolstats.common.toml": "polystirol-stats Configs",
+  "polystirolstats.configuration.section.polystirolstats.common.toml.title": "polystirol-stats Configs",
+  "polystirolstats.configuration.items": "Item List",
+  "polystirolstats.configuration.logDirtBlock": "Log Dirt Block",
+  "polystirolstats.configuration.magicNumberIntroduction": "Magic Number Text",
+  "polystirolstats.configuration.magicNumber": "Magic Number"
+}
