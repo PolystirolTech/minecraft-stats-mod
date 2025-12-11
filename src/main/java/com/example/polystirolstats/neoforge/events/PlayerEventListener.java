@@ -2,6 +2,7 @@ package com.example.polystirolstats.neoforge.events;
 
 import com.example.polystirolstats.core.collector.StatisticsCollector;
 import com.example.polystirolstats.core.model.*;
+import com.example.polystirolstats.core.util.WorldIdMapper;
 import com.example.polystirolstats.neoforge.adapter.NeoForgeStatisticsAdapter;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Player;
@@ -21,11 +22,13 @@ public class PlayerEventListener {
 	
 	private final StatisticsCollector collector;
 	private final String serverUuid;
+	private final WorldIdMapper worldIdMapper;
 	private final Map<UUID, PlayerSession> activeSessions = new ConcurrentHashMap<>();
 	
-	public PlayerEventListener(StatisticsCollector collector, String serverUuid) {
+	public PlayerEventListener(StatisticsCollector collector, String serverUuid, WorldIdMapper worldIdMapper) {
 		this.collector = collector;
 		this.serverUuid = serverUuid;
+		this.worldIdMapper = worldIdMapper;
 	}
 	
 	@SubscribeEvent
@@ -160,11 +163,22 @@ public class PlayerEventListener {
 	
 	
 	private void saveGameModeTime(UUID uuid, PlayerSession session, GameType gameType, long timeSpent) {
-		// Здесь нужно получить world_id, но пока используем null или локальный маппинг
-		// В реальной реализации нужно будет получать world_id из API или использовать маппинг
+		// Получаем world_id из маппера по имени мира
+		String worldName = session.currentWorld;
+		if (worldName == null || worldName.isEmpty()) {
+			LOGGER.warn("Не удалось сохранить время игрового режима для игрока {}: имя мира не указано", uuid);
+			return;
+		}
+		
+		Integer worldId = worldIdMapper.getWorldId(worldName);
+		if (worldId == null) {
+			LOGGER.warn("Не удалось сохранить время игрового режима для игрока {}: мир '{}' не зарегистрирован в маппере", uuid, worldName);
+			return;
+		}
+		
 		WorldTimeData worldTime = new WorldTimeData();
 		worldTime.setUuid(uuid.toString());
-		worldTime.setWorldId(null); // TODO: получить из API или маппинга
+		worldTime.setWorldId(worldId);
 		worldTime.setServerUuid(serverUuid);
 		worldTime.setSessionId(null);
 		

@@ -1,12 +1,17 @@
 package com.example.polystirolstats.core.collector;
 
 import com.example.polystirolstats.core.model.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 public class StatisticsCollector {
+	private static final Logger LOGGER = LoggerFactory.getLogger(StatisticsCollector.class);
+	
 	private final List<ServerData> servers = new CopyOnWriteArrayList<>();
 	private final List<UserData> users = new CopyOnWriteArrayList<>();
 	private final List<UserInfoData> userInfo = new CopyOnWriteArrayList<>();
@@ -115,7 +120,20 @@ public class StatisticsCollector {
 			batch.setWorlds(new ArrayList<>(worlds));
 		}
 		if (!worldTimes.isEmpty()) {
-			batch.setWorldTimes(new ArrayList<>(worldTimes));
+			// Фильтруем записи с null world_id перед отправкой
+			List<WorldTimeData> validWorldTimes = worldTimes.stream()
+					.filter(wt -> {
+						if (wt.getWorldId() == null) {
+							LOGGER.warn("Пропущена запись WorldTimeData с null world_id для игрока {}", wt.getUuid());
+							return false;
+						}
+						return true;
+					})
+					.collect(Collectors.toList());
+			
+			if (!validWorldTimes.isEmpty()) {
+				batch.setWorldTimes(validWorldTimes);
+			}
 		}
 		if (!versionProtocols.isEmpty()) {
 			batch.setVersionProtocols(new ArrayList<>(versionProtocols));

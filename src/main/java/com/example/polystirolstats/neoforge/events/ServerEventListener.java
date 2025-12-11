@@ -2,6 +2,7 @@ package com.example.polystirolstats.neoforge.events;
 
 import com.example.polystirolstats.core.collector.StatisticsCollector;
 import com.example.polystirolstats.core.model.*;
+import com.example.polystirolstats.core.util.WorldIdMapper;
 import com.example.polystirolstats.neoforge.adapter.NeoForgeStatisticsAdapter;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -17,6 +18,7 @@ public class ServerEventListener {
 	
 	private final StatisticsCollector collector;
 	private final String serverUuid;
+	private final WorldIdMapper worldIdMapper;
 	private int tickCounter = 0;
 	private int tpsCollectionCounter = 0;
 	private int pingCollectionCounter = 0;
@@ -25,9 +27,10 @@ public class ServerEventListener {
 	private static final int TPS_COLLECTION_INTERVAL = 20 * 60; // Каждую минуту
 	private static final int PING_COLLECTION_INTERVAL = 20 * 60 * 5; // Каждые 5 минут
 	
-	public ServerEventListener(StatisticsCollector collector, String serverUuid) {
+	public ServerEventListener(StatisticsCollector collector, String serverUuid, WorldIdMapper worldIdMapper) {
 		this.collector = collector;
 		this.serverUuid = serverUuid;
+		this.worldIdMapper = worldIdMapper;
 	}
 	
 	@SubscribeEvent
@@ -45,11 +48,16 @@ public class ServerEventListener {
 		serverData.setPlanVersion(null);
 		collector.addServer(serverData);
 		
-		// Добавляем миры
+		// Добавляем миры и регистрируем их в маппере
 		for (ServerLevel level : server.getAllLevels()) {
+			String worldName = NeoForgeStatisticsAdapter.getWorldName(level);
+			
+			// Регистрируем мир в маппере для получения ID
+			worldIdMapper.registerWorld(worldName);
+			
 			WorldData worldData = new WorldData();
 			worldData.setServerUuid(serverUuid);
-			worldData.setWorldName(NeoForgeStatisticsAdapter.getWorldName(level));
+			worldData.setWorldName(worldName);
 			collector.addWorld(worldData);
 		}
 		

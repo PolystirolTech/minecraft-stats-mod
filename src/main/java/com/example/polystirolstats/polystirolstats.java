@@ -3,6 +3,7 @@ package com.example.polystirolstats;
 import com.example.polystirolstats.core.api.StatisticsApiClient;
 import com.example.polystirolstats.core.collector.StatisticsCollector;
 import com.example.polystirolstats.core.model.BatchRequest;
+import com.example.polystirolstats.core.util.WorldIdMapper;
 import com.example.polystirolstats.neoforge.config.NeoForgeConfig;
 import com.example.polystirolstats.neoforge.events.PlayerEventListener;
 import com.example.polystirolstats.neoforge.events.ServerEventListener;
@@ -30,6 +31,7 @@ public class polystirolstats {
 	private StatisticsCollector collector;
 	private StatisticsApiClient apiClient;
 	private NeoForgeConfig config;
+	private WorldIdMapper worldIdMapper;
 	private PlayerEventListener playerEventListener;
 	private ServerEventListener serverEventListener;
 	private int sendIntervalTicks;
@@ -66,11 +68,12 @@ public class polystirolstats {
 			// Инициализация компонентов
 			collector = new StatisticsCollector();
 			apiClient = new StatisticsApiClient(backendUrl);
+			worldIdMapper = new WorldIdMapper();
 			sendIntervalTicks = config.getSendInterval() * 20; // Конвертируем секунды в тики
 			
 			// Регистрация обработчиков событий
-			playerEventListener = new PlayerEventListener(collector, serverUuid);
-			serverEventListener = new ServerEventListener(collector, serverUuid);
+			playerEventListener = new PlayerEventListener(collector, serverUuid, worldIdMapper);
+			serverEventListener = new ServerEventListener(collector, serverUuid, worldIdMapper);
 			NeoForge.EVENT_BUS.register(playerEventListener);
 			NeoForge.EVENT_BUS.register(serverEventListener);
 			
