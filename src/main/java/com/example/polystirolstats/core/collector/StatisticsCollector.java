@@ -86,61 +86,33 @@ public class StatisticsCollector {
 	public BatchRequest getBatchData(String serverUuid) {
 		BatchRequest batch = new BatchRequest(serverUuid);
 		
-		if (!servers.isEmpty()) {
-			batch.setServers(new ArrayList<>(servers));
-		}
-		if (!users.isEmpty()) {
-			batch.setUsers(new ArrayList<>(users));
-		}
-		if (!userInfo.isEmpty()) {
-			batch.setUserInfo(new ArrayList<>(userInfo));
-		}
-		if (!sessions.isEmpty()) {
-			batch.setSessions(new ArrayList<>(sessions));
-		}
-		if (!nicknames.isEmpty()) {
-			batch.setNicknames(new ArrayList<>(nicknames));
-		}
-		if (!kills.isEmpty()) {
-			batch.setKills(new ArrayList<>(kills));
-		}
-		if (!pings.isEmpty()) {
-			batch.setPings(new ArrayList<>(pings));
-		}
-		if (!platforms.isEmpty()) {
-			batch.setPlatforms(new ArrayList<>(platforms));
-		}
-		if (!pluginVersions.isEmpty()) {
-			batch.setPluginVersions(new ArrayList<>(pluginVersions));
-		}
-		if (!tps.isEmpty()) {
-			batch.setTps(new ArrayList<>(tps));
-		}
-		if (!worlds.isEmpty()) {
-			batch.setWorlds(new ArrayList<>(worlds));
-		}
-		if (!worldTimes.isEmpty()) {
-			// Фильтруем записи с null world_id перед отправкой
-			List<WorldTimeData> validWorldTimes = worldTimes.stream()
-					.filter(wt -> {
-						if (wt.getWorldId() == null) {
-							LOGGER.warn("Пропущена запись WorldTimeData с null world_id для игрока {}", wt.getUuid());
-							return false;
-						}
-						return true;
-					})
-					.collect(Collectors.toList());
-			
-			if (!validWorldTimes.isEmpty()) {
-				batch.setWorldTimes(validWorldTimes);
-			}
-		}
-		if (!versionProtocols.isEmpty()) {
-			batch.setVersionProtocols(new ArrayList<>(versionProtocols));
-		}
-		if (!geolocations.isEmpty()) {
-			batch.setGeolocations(new ArrayList<>(geolocations));
-		}
+		// Всегда устанавливаем все поля, даже если списки пустые, чтобы они отправлялись как пустые массивы []
+		batch.setServers(new ArrayList<>(servers));
+		batch.setUsers(new ArrayList<>(users));
+		batch.setUserInfo(new ArrayList<>(userInfo));
+		batch.setSessions(new ArrayList<>(sessions));
+		batch.setNicknames(new ArrayList<>(nicknames));
+		batch.setKills(new ArrayList<>(kills));
+		batch.setPings(new ArrayList<>(pings));
+		batch.setPlatforms(new ArrayList<>(platforms));
+		batch.setPluginVersions(new ArrayList<>(pluginVersions));
+		batch.setTps(new ArrayList<>(tps));
+		batch.setWorlds(new ArrayList<>(worlds));
+		
+		// Фильтруем записи с null world_id перед отправкой
+		List<WorldTimeData> validWorldTimes = worldTimes.stream()
+				.filter(wt -> {
+					if (wt.getWorldId() == null) {
+						LOGGER.warn("Пропущена запись WorldTimeData с null world_id для игрока {}", wt.getUuid());
+						return false;
+					}
+					return true;
+				})
+				.collect(Collectors.toList());
+		batch.setWorldTimes(validWorldTimes);
+		
+		batch.setVersionProtocols(new ArrayList<>(versionProtocols));
+		batch.setGeolocations(new ArrayList<>(geolocations));
 		
 		return batch;
 	}

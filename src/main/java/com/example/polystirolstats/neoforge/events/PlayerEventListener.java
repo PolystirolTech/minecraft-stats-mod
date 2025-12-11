@@ -162,6 +162,41 @@ public class PlayerEventListener {
 	}
 	
 	
+	public void finalizeAllSessions() {
+		long now = System.currentTimeMillis();
+		int sessionCount = activeSessions.size();
+		
+		for (Map.Entry<UUID, PlayerSession> entry : activeSessions.entrySet()) {
+			UUID uuid = entry.getKey();
+			PlayerSession session = entry.getValue();
+			
+			// Завершаем сессию
+			session.endTime = now;
+			
+			// Вычисляем время в игровых режимах на основе общей длительности сессии
+			long sessionDuration = session.endTime - session.startTime;
+			if (session.currentGameType != null) {
+				saveGameModeTime(uuid, session, session.currentGameType, sessionDuration);
+			}
+			
+			SessionData sessionData = new SessionData();
+			sessionData.setUuid(session.uuid);
+			sessionData.setServerUuid(session.serverUuid);
+			sessionData.setSessionStart(session.startTime);
+			sessionData.setSessionEnd(session.endTime);
+			sessionData.setMobKills(session.mobKills);
+			sessionData.setDeaths(session.deaths);
+			sessionData.setAfkTime(session.afkTime);
+			sessionData.setJoinAddress(session.joinAddress);
+			collector.addSession(sessionData);
+		}
+		
+		activeSessions.clear();
+		if (sessionCount > 0) {
+			LOGGER.info("Завершено {} активных сессий при остановке сервера", sessionCount);
+		}
+	}
+	
 	private void saveGameModeTime(UUID uuid, PlayerSession session, GameType gameType, long timeSpent) {
 		// Получаем world_id из маппера по имени мира
 		String worldName = session.currentWorld;

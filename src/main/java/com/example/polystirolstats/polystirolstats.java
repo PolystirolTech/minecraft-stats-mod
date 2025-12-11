@@ -36,6 +36,8 @@ public class polystirolstats {
 	private ServerEventListener serverEventListener;
 	private int sendIntervalTicks;
 	private int tickCounter = 0;
+	private String cachedServerUuid;
+	private String cachedBackendUrl;
 
 	// The constructor for the mod class is the first code that is run when your mod is loaded.
 	// FML will recognize some parameter types like IEventBus or ModContainer and pass them in automatically.
@@ -50,6 +52,17 @@ public class polystirolstats {
 	
 	private void onConfigLoad(ModConfigEvent event) {
 		if (event.getConfig().getSpec() == NeoForgeConfig.SPEC) {
+			// Проверяем, что это событие загрузки, а не выгрузки конфига
+			if (event instanceof ModConfigEvent.Unloading) {
+				// При выгрузке просто очищаем ссылки, не пытаясь читать конфиг
+				config = null;
+				return;
+			}
+			
+			if (!(event instanceof ModConfigEvent.Loading)) {
+				return;
+			}
+			
 			config = new NeoForgeConfig();
 			
 			String serverUuid = config.getServerUuid();
@@ -64,6 +77,10 @@ public class polystirolstats {
 				LOGGER.error("backendUrl не настроен в конфигурации! Мод не будет работать.");
 				return;
 			}
+			
+			// Кэшируем значения для использования после выгрузки конфига
+			cachedServerUuid = serverUuid;
+			cachedBackendUrl = backendUrl;
 			
 			// Инициализация компонентов
 			collector = new StatisticsCollector();
@@ -100,18 +117,22 @@ public class polystirolstats {
 	@SubscribeEvent
 	public void onServerStopping(ServerStoppingEvent event) {
 		// Отправляем оставшиеся данные при выключении
-		if (collector != null && apiClient != null && config != null) {
+		if (collector != null && apiClient != null && cachedServerUuid != null) {
+			// Завершаем все активные сессии перед отправкой данных
+			if (playerEventListener != null) {
+				playerEventListener.finalizeAllSessions();
+			}
 			sendBatchData(event.getServer());
 			LOGGER.info("Финальные данные статистики отправлены при остановке сервера");
 		}
 	}
 	
 	private void sendBatchData(MinecraftServer server) {
-		if (server == null || config == null) {
+		if (server == null || cachedServerUuid == null) {
 			return;
 		}
 		
-		String serverUuid = config.getServerUuid();
+		String serverUuid = cachedServerUuid;
 		BatchRequest batch = collector.getBatchData(serverUuid);
 		
 		// Проверяем, есть ли данные для отправки
@@ -136,7 +157,7 @@ public class polystirolstats {
 				boolean success = apiClient.sendBatch(batch);
 				if (success) {
 					collector.clear();
-					if (config.isDebugEnabled()) {
+					if (config != null && config.isDebugEnabled()) {
 						LOGGER.debug("Статистика успешно отправлена и очищена");
 					}
 				}
