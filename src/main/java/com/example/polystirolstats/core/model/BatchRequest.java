@@ -32,6 +32,8 @@ public class BatchRequest {
 	private List<VersionProtocolData> versionProtocols;
 	
 	private List<GeolocationData> geolocations;
+	
+	private List<CounterData> counters;
 
 	public BatchRequest() {
 	}
@@ -158,6 +160,14 @@ public class BatchRequest {
 
 	public void setGeolocations(List<GeolocationData> geolocations) {
 		this.geolocations = geolocations;
+	}
+
+	public List<CounterData> getCounters() {
+		return counters;
+	}
+
+	public void setCounters(List<CounterData> counters) {
+		this.counters = counters;
 	}
 }
 

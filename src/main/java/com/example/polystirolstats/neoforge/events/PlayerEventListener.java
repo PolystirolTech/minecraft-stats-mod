@@ -4,15 +4,18 @@ import com.example.polystirolstats.core.collector.StatisticsCollector;
 import com.example.polystirolstats.core.model.*;
 import com.example.polystirolstats.core.util.WorldIdMapper;
 import com.example.polystirolstats.neoforge.adapter.NeoForgeStatisticsAdapter;
+import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.GameType;
 import net.neoforged.bus.api.SubscribeEvent;
+import net.neoforged.neoforge.event.ServerChatEvent;
 import net.neoforged.neoforge.event.entity.living.LivingDeathEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
+import net.neoforged.neoforge.event.tick.PlayerTickEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -24,6 +27,9 @@ public class PlayerEventListener {
 	private final String serverUuid;
 	private final WorldIdMapper worldIdMapper;
 	private final Map<UUID, PlayerSession> activeSessions = new ConcurrentHashMap<>();
+	private final Map<UUID, BlockPos> lastPositions = new ConcurrentHashMap<>();
+	private final Map<UUID, Integer> blocksTraveled = new ConcurrentHashMap<>();
+	private final Map<UUID, Integer> messagesSent = new ConcurrentHashMap<>();
 	
 	public PlayerEventListener(StatisticsCollector collector, String serverUuid, WorldIdMapper worldIdMapper) {
 		this.collector = collector;
@@ -71,6 +77,11 @@ public class PlayerEventListener {
 		session.currentWorld = NeoForgeStatisticsAdapter.getWorldName(player.level());
 		activeSessions.put(uuid, session);
 		
+		// Инициализируем отслеживание позиции
+		lastPositions.put(uuid, player.blockPosition());
+		blocksTraveled.put(uuid, 0);
+		messagesSent.put(uuid, 0);
+		
 		// Добавляем никнейм
 		NicknameData nickname = new NicknameData();
 		nickname.setUuid(uuid.toString());
@@ -99,7 +110,16 @@ public class PlayerEventListener {
 		}
 		
 		UUID uuid = player.getUUID();
+		
+		// Собираем счетчики игрока перед очисткой, чтобы они не потерялись
+		collectPlayerCounters(uuid);
+		
 		PlayerSession session = activeSessions.remove(uuid);
+		
+		// Очищаем данные отслеживания движения
+		lastPositions.remove(uuid);
+		blocksTraveled.remove(uuid);
+		messagesSent.remove(uuid);
 		
 		if (session != null) {
 			// Завершаем сессию
@@ -192,8 +212,136 @@ public class PlayerEventListener {
 		}
 		
 		activeSessions.clear();
+		lastPositions.clear();
+		blocksTraveled.clear();
+		messagesSent.clear();
 		if (sessionCount > 0) {
 			LOGGER.info("Завершено {} активных сессий при остановке сервера", sessionCount);
+		}
+	}
+	
+	@SubscribeEvent
+	public void onServerChat(ServerChatEvent event) {
+		ServerPlayer player = event.getPlayer();
+		if (player == null) {
+			return;
+		}
+		
+		UUID uuid = player.getUUID();
+		if (activeSessions.containsKey(uuid)) {
+			// Увеличиваем счетчик отправленных сообщений
+			messagesSent.merge(uuid, 1, Integer::sum);
+		}
+	}
+	
+	@SubscribeEvent
+	public void onPlayerTick(PlayerTickEvent.Post event) {
+		if (!(event.getEntity() instanceof ServerPlayer player)) {
+			return;
+		}
+		
+		UUID uuid = player.getUUID();
+		if (!activeSessions.containsKey(uuid)) {
+			return;
+		}
+		
+		BlockPos currentPos = player.blockPosition();
+		BlockPos lastPos = lastPositions.get(uuid);
+		
+		if (lastPos != null && !currentPos.equals(lastPos)) {
+			// Вычисляем количество пройденных блоков
+			int dx = Math.abs(currentPos.getX() - lastPos.getX());
+			int dy = Math.abs(currentPos.getY() - lastPos.getY());
+			int dz = Math.abs(currentPos.getZ() - lastPos.getZ());
+			int blocks = dx + dy + dz;
+			
+			// Накапливаем пройденные блоки
+			blocksTraveled.merge(uuid, blocks, Integer::sum);
+			
+			// Обновляем последнюю позицию
+			lastPositions.put(uuid, currentPos);
+		} else if (lastPos == null) {
+			// Инициализируем позицию, если её еще нет
+			lastPositions.put(uuid, currentPos);
+		}
+	}
+	
+	/**
+	 * Собирает счетчики конкретного игрока и добавляет их в collector
+	 */
+	private void collectPlayerCounters(UUID uuid) {
+		Integer blocks = blocksTraveled.get(uuid);
+		Integer messages = messagesSent.get(uuid);
+		
+		// Проверяем, есть ли хотя бы один счетчик > 0
+		if ((blocks != null && blocks > 0) || (messages != null && messages > 0)) {
+			Map<String, Integer> countersMap = new HashMap<>();
+			
+			if (blocks != null && blocks > 0) {
+				countersMap.put("blocks_traveled", blocks);
+			}
+			
+			if (messages != null && messages > 0) {
+				countersMap.put("messages_sent", messages);
+			}
+			
+			if (!countersMap.isEmpty()) {
+				CounterData counterData = new CounterData();
+				counterData.setUuid(uuid.toString());
+				counterData.setServerUuid(serverUuid);
+				counterData.setCounters(countersMap);
+				
+				collector.addCounter(counterData);
+			}
+		}
+	}
+	
+	public void collectAndSendCounters() {
+		// Объединяем все UUID из обоих счетчиков
+		Map<UUID, Map<String, Integer>> allCounters = new HashMap<>();
+		
+		// Добавляем blocks_traveled
+		for (Map.Entry<UUID, Integer> entry : blocksTraveled.entrySet()) {
+			UUID uuid = entry.getKey();
+			Integer blocks = entry.getValue();
+			if (blocks > 0) {
+				allCounters.computeIfAbsent(uuid, k -> new HashMap<>()).put("blocks_traveled", blocks);
+			}
+		}
+		
+		// Добавляем messages_sent
+		for (Map.Entry<UUID, Integer> entry : messagesSent.entrySet()) {
+			UUID uuid = entry.getKey();
+			Integer messages = entry.getValue();
+			if (messages > 0) {
+				allCounters.computeIfAbsent(uuid, k -> new HashMap<>()).put("messages_sent", messages);
+			}
+		}
+		
+		// Создаем CounterData для каждого игрока с хотя бы одним счетчиком > 0
+		for (Map.Entry<UUID, Map<String, Integer>> entry : allCounters.entrySet()) {
+			UUID uuid = entry.getKey();
+			Map<String, Integer> countersMap = entry.getValue();
+			
+			if (!countersMap.isEmpty()) {
+				CounterData counterData = new CounterData();
+				counterData.setUuid(uuid.toString());
+				counterData.setServerUuid(serverUuid);
+				counterData.setCounters(countersMap);
+				
+				collector.addCounter(counterData);
+			}
+		}
+	}
+	
+	public void resetCounters() {
+		// Сбрасываем счетчики пройденных блоков, но сохраняем последние позиции
+		for (UUID uuid : blocksTraveled.keySet()) {
+			blocksTraveled.put(uuid, 0);
+		}
+		// Сбрасываем счетчики отправленных сообщений
+		for (UUID uuid : messagesSent.keySet()) {
+			messagesSent.put(uuid, 0);
 		}
 	}
 	

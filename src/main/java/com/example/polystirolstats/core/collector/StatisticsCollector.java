@@ -26,6 +26,7 @@ public class StatisticsCollector {
 	private final List<WorldTimeData> worldTimes = new CopyOnWriteArrayList<>();
 	private final List<VersionProtocolData> versionProtocols = new CopyOnWriteArrayList<>();
 	private final List<GeolocationData> geolocations = new CopyOnWriteArrayList<>();
+	private final List<CounterData> counters = new CopyOnWriteArrayList<>();
 	
 	public void addServer(ServerData server) {
 		servers.add(server);
@@ -83,6 +84,10 @@ public class StatisticsCollector {
 		geolocations.add(geolocation);
 	}
 	
+	public void addCounter(CounterData counter) {
+		counters.add(counter);
+	}
+	
 	public BatchRequest getBatchData(String serverUuid) {
 		BatchRequest batch = new BatchRequest(serverUuid);
 		
@@ -113,6 +118,7 @@ public class StatisticsCollector {
 		
 		batch.setVersionProtocols(new ArrayList<>(versionProtocols));
 		batch.setGeolocations(new ArrayList<>(geolocations));
+		batch.setCounters(new ArrayList<>(counters));
 		
 		return batch;
 	}
@@ -132,6 +138,7 @@ public class StatisticsCollector {
 		worldTimes.clear();
 		versionProtocols.clear();
 		geolocations.clear();
+		counters.clear();
 	}
 }
 

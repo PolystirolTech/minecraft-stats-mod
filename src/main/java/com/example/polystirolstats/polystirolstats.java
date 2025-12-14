@@ -132,6 +132,11 @@ public class polystirolstats {
 			return;
 		}
 		
+		// Собираем данные о пройденных блоках перед созданием batch
+		if (playerEventListener != null) {
+			playerEventListener.collectAndSendCounters();
+		}
+		
 		String serverUuid = cachedServerUuid;
 		BatchRequest batch = collector.getBatchData(serverUuid);
 		
@@ -149,7 +154,8 @@ public class polystirolstats {
 				batch.getPluginVersions() != null && !batch.getPluginVersions().isEmpty() ||
 				batch.getWorldTimes() != null && !batch.getWorldTimes().isEmpty() ||
 				batch.getVersionProtocols() != null && !batch.getVersionProtocols().isEmpty() ||
-				batch.getGeolocations() != null && !batch.getGeolocations().isEmpty();
+				batch.getGeolocations() != null && !batch.getGeolocations().isEmpty() ||
+				batch.getCounters() != null && !batch.getCounters().isEmpty();
 		
 		if (hasData) {
 			// Отправляем асинхронно, чтобы не блокировать основной поток
@@ -157,6 +163,10 @@ public class polystirolstats {
 				boolean success = apiClient.sendBatch(batch);
 				if (success) {
 					collector.clear();
+					// Сбрасываем счетчики пройденных блоков после успешной отправки
+					if (playerEventListener != null) {
+						playerEventListener.resetCounters();
+					}
 					if (config != null && config.isDebugEnabled()) {
 						LOGGER.debug("Статистика успешно отправлена и очищена");
 					}
