@@ -5,12 +5,17 @@ import com.example.polystirolstats.core.model.*;
 import com.example.polystirolstats.core.util.WorldIdMapper;
 import com.example.polystirolstats.neoforge.adapter.NeoForgeStatisticsAdapter;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.GameType;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.event.ServerChatEvent;
 import net.neoforged.neoforge.event.entity.living.LivingDeathEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
+import net.neoforged.neoforge.event.level.BlockEvent;
 import net.neoforged.neoforge.event.tick.PlayerTickEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,6 +37,8 @@ public class PlayerEventListener {
 	private final Map<UUID, Integer> messagesSent = new ConcurrentHashMap<>();
 	private final Map<UUID, Long> lastActivityTime = new ConcurrentHashMap<>();
 	private final Map<UUID, Long> afkTime = new ConcurrentHashMap<>();
+	private final Map<UUID, Integer> quartzMined = new ConcurrentHashMap<>();
+	private final Map<UUID, Integer> deepslateMined = new ConcurrentHashMap<>();
 	
 	// Порог AFK: 5 минут без активности (в миллисекундах)
 	private static final long AFK_THRESHOLD_MS = 5 * 60 * 1000L;
@@ -88,6 +95,8 @@ public class PlayerEventListener {
 		messagesSent.put(uuid, 0);
 		lastActivityTime.put(uuid, now);
 		afkTime.put(uuid, 0L);
+		quartzMined.put(uuid, 0);
+		deepslateMined.put(uuid, 0);
 		
 		// Добавляем никнейм
 		NicknameData nickname = new NicknameData();
@@ -129,6 +138,8 @@ public class PlayerEventListener {
 		messagesSent.remove(uuid);
 		lastActivityTime.remove(uuid);
 		afkTime.remove(uuid);
+		quartzMined.remove(uuid);
+		deepslateMined.remove(uuid);
 		
 		if (session != null) {
 			// Завершаем сессию
@@ -226,8 +237,47 @@ public class PlayerEventListener {
 		messagesSent.clear();
 		lastActivityTime.clear();
 		afkTime.clear();
+		quartzMined.clear();
+		deepslateMined.clear();
 		if (sessionCount > 0) {
 			LOGGER.info("Завершено {} активных сессий при остановке сервера", sessionCount);
+		}
+	}
+	
+	@SubscribeEvent
+	public void onBlockBreak(BlockEvent.BreakEvent event) {
+		if (!(event.getPlayer() instanceof ServerPlayer player)) {
+			return;
+		}
+		
+		UUID uuid = player.getUUID();
+		if (!activeSessions.containsKey(uuid)) {
+			return;
+		}
+		
+		Block block = event.getState().getBlock();
+		ResourceLocation blockId = BuiltInRegistries.BLOCK.getKey(block);
+		
+		if (blockId == null) {
+			return;
+		}
+		
+		String blockName = blockId.toString();
+		
+		// Проверяем кварц (nether quartz ore и deepslate variants)
+		if (block == Blocks.NETHER_QUARTZ_ORE || 
+			blockName.contains("quartz_ore") || 
+			blockName.contains("quartz_block")) {
+			quartzMined.merge(uuid, 1, Integer::sum);
+			// Обновляем время последней активности
+			lastActivityTime.put(uuid, System.currentTimeMillis());
+		}
+		
+		// Проверяем глубинный сланец
+		if (block == Blocks.DEEPSLATE || blockName.contains("deepslate")) {
+			deepslateMined.merge(uuid, 1, Integer::sum);
+			// Обновляем время последней активности
+			lastActivityTime.put(uuid, System.currentTimeMillis());
 		}
 	}
 	
@@ -303,9 +353,13 @@ public class PlayerEventListener {
 		Integer blocks = blocksTraveled.get(uuid);
 		Integer messages = messagesSent.get(uuid);
 		Long afk = afkTime.get(uuid);
+		Integer quartz = quartzMined.get(uuid);
+		Integer deepslate = deepslateMined.get(uuid);
 		
 		// Проверяем, есть ли хотя бы один счетчик > 0
-		if ((blocks != null && blocks > 0) || (messages != null && messages > 0) || (afk != null && afk > 0)) {
+		if ((blocks != null && blocks > 0) || (messages != null && messages > 0) || 
+			(afk != null && afk > 0) || (quartz != null && quartz > 0) || 
+			(deepslate != null && deepslate > 0)) {
 			Map<String, Integer> countersMap = new HashMap<>();
 			
 			if (blocks != null && blocks > 0) {
@@ -319,6 +373,14 @@ public class PlayerEventListener {
 			if (afk != null && afk > 0) {
 				// Конвертируем миллисекунды в секунды для отправки
 				countersMap.put("afk_time", (int)(afk / 1000));
+			}
+			
+			if (quartz != null && quartz > 0) {
+				countersMap.put("quartz_mined", quartz);
+			}
+			
+			if (deepslate != null && deepslate > 0) {
+				countersMap.put("deepslate_mined", deepslate);
 			}
 			
 			if (!countersMap.isEmpty()) {
@@ -364,6 +426,24 @@ public class PlayerEventListener {
 			}
 		}
 		
+		// Добавляем quartz_mined
+		for (Map.Entry<UUID, Integer> entry : quartzMined.entrySet()) {
+			UUID uuid = entry.getKey();
+			Integer quartz = entry.getValue();
+			if (quartz > 0) {
+				allCounters.computeIfAbsent(uuid, k -> new HashMap<>()).put("quartz_mined", quartz);
+			}
+		}
+		
+		// Добавляем deepslate_mined
+		for (Map.Entry<UUID, Integer> entry : deepslateMined.entrySet()) {
+			UUID uuid = entry.getKey();
+			Integer deepslate = entry.getValue();
+			if (deepslate > 0) {
+				allCounters.computeIfAbsent(uuid, k -> new HashMap<>()).put("deepslate_mined", deepslate);
+			}
+		}
+		
 		// Создаем CounterData для каждого игрока с хотя бы одним счетчиком > 0
 		for (Map.Entry<UUID, Map<String, Integer>> entry : allCounters.entrySet()) {
 			UUID uuid = entry.getKey();
@@ -392,6 +472,14 @@ public class PlayerEventListener {
 		// Сбрасываем счетчики AFK времени
 		for (UUID uuid : afkTime.keySet()) {
 			afkTime.put(uuid, 0L);
+		}
+		// Сбрасываем счетчики добытого кварца
+		for (UUID uuid : quartzMined.keySet()) {
+			quartzMined.put(uuid, 0);
+		}
+		// Сбрасываем счетчики добытого глубинного сланца
+		for (UUID uuid : deepslateMined.keySet()) {
+			deepslateMined.put(uuid, 0);
 		}
 	}
 	

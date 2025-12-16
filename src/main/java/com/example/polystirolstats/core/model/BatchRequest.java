@@ -32,7 +32,7 @@ public class BatchRequest {
 	private List<VersionProtocolData> versionProtocols;
 	
 	private List<GeolocationData> geolocations;
-	
+
 	private List<CounterData> counters;
 
 	public BatchRequest() {
