@@ -8,6 +8,8 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.damagesource.DamageSource;
+import net.minecraft.world.damagesource.DamageTypes;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
@@ -39,6 +41,8 @@ public class PlayerEventListener {
 	private final Map<UUID, Long> afkTime = new ConcurrentHashMap<>();
 	private final Map<UUID, Integer> quartzMined = new ConcurrentHashMap<>();
 	private final Map<UUID, Integer> deepslateMined = new ConcurrentHashMap<>();
+	private final Map<UUID, Integer> playerKills = new ConcurrentHashMap<>();
+	private final Map<UUID, Integer> fallDeaths = new ConcurrentHashMap<>();
 	
 	// Порог AFK: 5 минут без активности (в миллисекундах)
 	private static final long AFK_THRESHOLD_MS = 5 * 60 * 1000L;
@@ -97,6 +101,8 @@ public class PlayerEventListener {
 		afkTime.put(uuid, 0L);
 		quartzMined.put(uuid, 0);
 		deepslateMined.put(uuid, 0);
+		playerKills.put(uuid, 0);
+		fallDeaths.put(uuid, 0);
 		
 		// Добавляем никнейм
 		NicknameData nickname = new NicknameData();
@@ -140,6 +146,8 @@ public class PlayerEventListener {
 		afkTime.remove(uuid);
 		quartzMined.remove(uuid);
 		deepslateMined.remove(uuid);
+		playerKills.remove(uuid);
+		fallDeaths.remove(uuid);
 		
 		if (session != null) {
 			// Завершаем сессию
@@ -178,9 +186,24 @@ public class PlayerEventListener {
 			session.deaths++;
 		}
 		
-		// Проверяем, есть ли убийца
-		if (event.getSource().getEntity() instanceof ServerPlayer killer) {
+		DamageSource damageSource = event.getSource();
+		
+		// Проверяем смерть от падения
+		if (damageSource.is(DamageTypes.FALL)) {
+			if (activeSessions.containsKey(victimUuid)) {
+				fallDeaths.merge(victimUuid, 1, Integer::sum);
+			}
+		}
+		
+		// Проверяем, есть ли убийца-игрок
+		if (damageSource.getEntity() instanceof ServerPlayer killer) {
 			UUID killerUuid = killer.getUUID();
+			
+			// Увеличиваем счетчик убийств игроков для убийцы
+			if (activeSessions.containsKey(killerUuid)) {
+				playerKills.merge(killerUuid, 1, Integer::sum);
+			}
+			
 			String weapon = "UNKNOWN";
 			
 			if (killer.getMainHandItem() != null && !killer.getMainHandItem().isEmpty()) {
@@ -239,6 +262,8 @@ public class PlayerEventListener {
 		afkTime.clear();
 		quartzMined.clear();
 		deepslateMined.clear();
+		playerKills.clear();
+		fallDeaths.clear();
 		if (sessionCount > 0) {
 			LOGGER.info("Завершено {} активных сессий при остановке сервера", sessionCount);
 		}
@@ -355,11 +380,14 @@ public class PlayerEventListener {
 		Long afk = afkTime.get(uuid);
 		Integer quartz = quartzMined.get(uuid);
 		Integer deepslate = deepslateMined.get(uuid);
+		Integer playerKillsCount = playerKills.get(uuid);
+		Integer fallDeathsCount = fallDeaths.get(uuid);
 		
 		// Проверяем, есть ли хотя бы один счетчик > 0
 		if ((blocks != null && blocks > 0) || (messages != null && messages > 0) || 
 			(afk != null && afk > 0) || (quartz != null && quartz > 0) || 
-			(deepslate != null && deepslate > 0)) {
+			(deepslate != null && deepslate > 0) || (playerKillsCount != null && playerKillsCount > 0) ||
+			(fallDeathsCount != null && fallDeathsCount > 0)) {
 			Map<String, Integer> countersMap = new HashMap<>();
 			
 			if (blocks != null && blocks > 0) {
@@ -381,6 +409,14 @@ public class PlayerEventListener {
 			
 			if (deepslate != null && deepslate > 0) {
 				countersMap.put("deepslate_mined", deepslate);
+			}
+			
+			if (playerKillsCount != null && playerKillsCount > 0) {
+				countersMap.put("player_kills", playerKillsCount);
+			}
+			
+			if (fallDeathsCount != null && fallDeathsCount > 0) {
+				countersMap.put("fall_deaths", fallDeathsCount);
 			}
 			
 			if (!countersMap.isEmpty()) {
@@ -444,6 +480,24 @@ public class PlayerEventListener {
 			}
 		}
 		
+		// Добавляем player_kills
+		for (Map.Entry<UUID, Integer> entry : playerKills.entrySet()) {
+			UUID uuid = entry.getKey();
+			Integer kills = entry.getValue();
+			if (kills > 0) {
+				allCounters.computeIfAbsent(uuid, k -> new HashMap<>()).put("player_kills", kills);
+			}
+		}
+		
+		// Добавляем fall_deaths
+		for (Map.Entry<UUID, Integer> entry : fallDeaths.entrySet()) {
+			UUID uuid = entry.getKey();
+			Integer deaths = entry.getValue();
+			if (deaths > 0) {
+				allCounters.computeIfAbsent(uuid, k -> new HashMap<>()).put("fall_deaths", deaths);
+			}
+		}
+		
 		// Создаем CounterData для каждого игрока с хотя бы одним счетчиком > 0
 		for (Map.Entry<UUID, Map<String, Integer>> entry : allCounters.entrySet()) {
 			UUID uuid = entry.getKey();
@@ -480,6 +534,14 @@ public class PlayerEventListener {
 		// Сбрасываем счетчики добытого глубинного сланца
 		for (UUID uuid : deepslateMined.keySet()) {
 			deepslateMined.put(uuid, 0);
+		}
+		// Сбрасываем счетчики убийств игроков
+		for (UUID uuid : playerKills.keySet()) {
+			playerKills.put(uuid, 0);
+		}
+		// Сбрасываем счетчики смертей от падения
+		for (UUID uuid : fallDeaths.keySet()) {
+			fallDeaths.put(uuid, 0);
 		}
 	}
 	
