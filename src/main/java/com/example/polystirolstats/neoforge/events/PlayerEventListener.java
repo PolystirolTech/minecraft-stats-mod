@@ -10,6 +10,8 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.damagesource.DamageTypes;
+import net.minecraft.world.entity.monster.Creeper;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
@@ -43,6 +45,8 @@ public class PlayerEventListener {
 	private final Map<UUID, Integer> deepslateMined = new ConcurrentHashMap<>();
 	private final Map<UUID, Integer> playerKills = new ConcurrentHashMap<>();
 	private final Map<UUID, Integer> fallDeaths = new ConcurrentHashMap<>();
+	private final Map<UUID, Integer> creeperKillsWithEgg = new ConcurrentHashMap<>();
+	private final Map<UUID, Integer> diamondsMined = new ConcurrentHashMap<>();
 	
 	// Порог AFK: 5 минут без активности (в миллисекундах)
 	private static final long AFK_THRESHOLD_MS = 5 * 60 * 1000L;
@@ -103,6 +107,8 @@ public class PlayerEventListener {
 		deepslateMined.put(uuid, 0);
 		playerKills.put(uuid, 0);
 		fallDeaths.put(uuid, 0);
+		creeperKillsWithEgg.put(uuid, 0);
+		diamondsMined.put(uuid, 0);
 		
 		// Добавляем никнейм
 		NicknameData nickname = new NicknameData();
@@ -148,6 +154,8 @@ public class PlayerEventListener {
 		deepslateMined.remove(uuid);
 		playerKills.remove(uuid);
 		fallDeaths.remove(uuid);
+		creeperKillsWithEgg.remove(uuid);
+		diamondsMined.remove(uuid);
 		
 		if (session != null) {
 			// Завершаем сессию
@@ -176,9 +184,17 @@ public class PlayerEventListener {
 	
 	@SubscribeEvent
 	public void onPlayerDeath(LivingDeathEvent event) {
-		if (!(event.getEntity() instanceof ServerPlayer victim)) {
-			return;
+		// Обрабатываем смерть игрока
+		if (event.getEntity() instanceof ServerPlayer victim) {
+			handlePlayerDeath(event, victim);
 		}
+		// Обрабатываем убийство крипера куриным яйцом
+		else if (event.getEntity() instanceof Creeper creeper) {
+			handleCreeperDeath(event, creeper);
+		}
+	}
+	
+	private void handlePlayerDeath(LivingDeathEvent event, ServerPlayer victim) {
 		
 		UUID victimUuid = victim.getUUID();
 		PlayerSession session = activeSessions.get(victimUuid);
@@ -224,6 +240,35 @@ public class PlayerEventListener {
 		}
 	}
 	
+	private void handleCreeperDeath(LivingDeathEvent event, Creeper creeper) {
+		DamageSource damageSource = event.getSource();
+		
+		// Проверяем, убил ли игрок крипера куриным яйцом
+		if (damageSource.getEntity() instanceof ServerPlayer killer) {
+			UUID killerUuid = killer.getUUID();
+			
+			// Проверяем, что в руке у игрока куриное яйцо
+			boolean killedWithEgg = false;
+			if (killer.getMainHandItem() != null && !killer.getMainHandItem().isEmpty()) {
+				if (killer.getMainHandItem().is(Items.EGG)) {
+					killedWithEgg = true;
+				}
+			}
+			// Также проверяем вторую руку
+			if (!killedWithEgg && killer.getOffhandItem() != null && !killer.getOffhandItem().isEmpty()) {
+				if (killer.getOffhandItem().is(Items.EGG)) {
+					killedWithEgg = true;
+				}
+			}
+			
+			if (killedWithEgg && activeSessions.containsKey(killerUuid)) {
+				creeperKillsWithEgg.merge(killerUuid, 1, Integer::sum);
+				// Обновляем время последней активности
+				lastActivityTime.put(killerUuid, System.currentTimeMillis());
+			}
+		}
+	}
+	
 	
 	public void finalizeAllSessions() {
 		long now = System.currentTimeMillis();
@@ -264,6 +309,8 @@ public class PlayerEventListener {
 		deepslateMined.clear();
 		playerKills.clear();
 		fallDeaths.clear();
+		creeperKillsWithEgg.clear();
+		diamondsMined.clear();
 		if (sessionCount > 0) {
 			LOGGER.info("Завершено {} активных сессий при остановке сервера", sessionCount);
 		}
@@ -301,6 +348,14 @@ public class PlayerEventListener {
 		// Проверяем глубинный сланец
 		if (block == Blocks.DEEPSLATE || blockName.contains("deepslate")) {
 			deepslateMined.merge(uuid, 1, Integer::sum);
+			// Обновляем время последней активности
+			lastActivityTime.put(uuid, System.currentTimeMillis());
+		}
+		
+		// Проверяем алмазную руду
+		if (block == Blocks.DIAMOND_ORE || block == Blocks.DEEPSLATE_DIAMOND_ORE || 
+			blockName.contains("diamond_ore")) {
+			diamondsMined.merge(uuid, 1, Integer::sum);
 			// Обновляем время последней активности
 			lastActivityTime.put(uuid, System.currentTimeMillis());
 		}
@@ -382,12 +437,15 @@ public class PlayerEventListener {
 		Integer deepslate = deepslateMined.get(uuid);
 		Integer playerKillsCount = playerKills.get(uuid);
 		Integer fallDeathsCount = fallDeaths.get(uuid);
+		Integer creeperKills = creeperKillsWithEgg.get(uuid);
+		Integer diamonds = diamondsMined.get(uuid);
 		
 		// Проверяем, есть ли хотя бы один счетчик > 0
 		if ((blocks != null && blocks > 0) || (messages != null && messages > 0) || 
 			(afk != null && afk > 0) || (quartz != null && quartz > 0) || 
 			(deepslate != null && deepslate > 0) || (playerKillsCount != null && playerKillsCount > 0) ||
-			(fallDeathsCount != null && fallDeathsCount > 0)) {
+			(fallDeathsCount != null && fallDeathsCount > 0) || (creeperKills != null && creeperKills > 0) ||
+			(diamonds != null && diamonds > 0)) {
 			Map<String, Integer> countersMap = new HashMap<>();
 			
 			if (blocks != null && blocks > 0) {
@@ -417,6 +475,14 @@ public class PlayerEventListener {
 			
 			if (fallDeathsCount != null && fallDeathsCount > 0) {
 				countersMap.put("fall_deaths", fallDeathsCount);
+			}
+			
+			if (creeperKills != null && creeperKills > 0) {
+				countersMap.put("creeper_kills_with_egg", creeperKills);
+			}
+			
+			if (diamonds != null && diamonds > 0) {
+				countersMap.put("diamonds_mined", diamonds);
 			}
 			
 			if (!countersMap.isEmpty()) {
@@ -498,6 +564,24 @@ public class PlayerEventListener {
 			}
 		}
 		
+		// Добавляем creeper_kills_with_egg
+		for (Map.Entry<UUID, Integer> entry : creeperKillsWithEgg.entrySet()) {
+			UUID uuid = entry.getKey();
+			Integer kills = entry.getValue();
+			if (kills > 0) {
+				allCounters.computeIfAbsent(uuid, k -> new HashMap<>()).put("creeper_kills_with_egg", kills);
+			}
+		}
+		
+		// Добавляем diamonds_mined
+		for (Map.Entry<UUID, Integer> entry : diamondsMined.entrySet()) {
+			UUID uuid = entry.getKey();
+			Integer diamonds = entry.getValue();
+			if (diamonds > 0) {
+				allCounters.computeIfAbsent(uuid, k -> new HashMap<>()).put("diamonds_mined", diamonds);
+			}
+		}
+		
 		// Создаем CounterData для каждого игрока с хотя бы одним счетчиком > 0
 		for (Map.Entry<UUID, Map<String, Integer>> entry : allCounters.entrySet()) {
 			UUID uuid = entry.getKey();
@@ -542,6 +626,14 @@ public class PlayerEventListener {
 		// Сбрасываем счетчики смертей от падения
 		for (UUID uuid : fallDeaths.keySet()) {
 			fallDeaths.put(uuid, 0);
+		}
+		// Сбрасываем счетчики убийств крипера куриным яйцом
+		for (UUID uuid : creeperKillsWithEgg.keySet()) {
+			creeperKillsWithEgg.put(uuid, 0);
+		}
+		// Сбрасываем счетчики добытых алмазов
+		for (UUID uuid : diamondsMined.keySet()) {
+			diamondsMined.put(uuid, 0);
 		}
 	}
 	
