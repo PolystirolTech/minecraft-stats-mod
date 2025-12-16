@@ -11,8 +11,10 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.damagesource.DamageTypes;
 import net.minecraft.world.entity.monster.Creeper;
+import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.GameType;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -47,9 +49,20 @@ public class PlayerEventListener {
 	private final Map<UUID, Integer> fallDeaths = new ConcurrentHashMap<>();
 	private final Map<UUID, Integer> creeperKillsWithEgg = new ConcurrentHashMap<>();
 	private final Map<UUID, Integer> diamondsMined = new ConcurrentHashMap<>();
+	private final Map<UUID, Long> activeTime = new ConcurrentHashMap<>(); // Время онлайн без AFK
+	private final Map<UUID, Integer> cannyCatMessages = new ConcurrentHashMap<>();
+	private final Map<UUID, Integer> firstJoinAfterRestart = new ConcurrentHashMap<>();
+	private final Map<UUID, Integer> nightMobKills = new ConcurrentHashMap<>();
 	
 	// Порог AFK: 5 минут без активности (в миллисекундах)
 	private static final long AFK_THRESHOLD_MS = 5 * 60 * 1000L;
+	
+	// Флаг первого входа после перезапуска
+	private static volatile boolean isFirstJoinAfterRestart = true;
+	
+	public static void setFirstJoinAfterRestart(boolean value) {
+		isFirstJoinAfterRestart = value;
+	}
 	
 	public PlayerEventListener(StatisticsCollector collector, String serverUuid, WorldIdMapper worldIdMapper) {
 		this.collector = collector;
@@ -109,6 +122,17 @@ public class PlayerEventListener {
 		fallDeaths.put(uuid, 0);
 		creeperKillsWithEgg.put(uuid, 0);
 		diamondsMined.put(uuid, 0);
+		activeTime.put(uuid, 0L);
+		cannyCatMessages.put(uuid, 0);
+		nightMobKills.put(uuid, 0);
+		
+		// Проверяем первый вход после перезапуска
+		if (isFirstJoinAfterRestart) {
+			firstJoinAfterRestart.put(uuid, 1);
+			isFirstJoinAfterRestart = false; // Сбрасываем флаг после первого входа
+		} else {
+			firstJoinAfterRestart.put(uuid, 0);
+		}
 		
 		// Добавляем никнейм
 		NicknameData nickname = new NicknameData();
@@ -156,6 +180,10 @@ public class PlayerEventListener {
 		fallDeaths.remove(uuid);
 		creeperKillsWithEgg.remove(uuid);
 		diamondsMined.remove(uuid);
+		activeTime.remove(uuid);
+		cannyCatMessages.remove(uuid);
+		firstJoinAfterRestart.remove(uuid);
+		nightMobKills.remove(uuid);
 		
 		if (session != null) {
 			// Завершаем сессию
@@ -191,6 +219,10 @@ public class PlayerEventListener {
 		// Обрабатываем убийство крипера куриным яйцом
 		else if (event.getEntity() instanceof Creeper creeper) {
 			handleCreeperDeath(event, creeper);
+		}
+		// Обрабатываем убийство монстров ночью
+		else if (event.getEntity() instanceof Monster monster) {
+			handleMonsterDeath(event, monster);
 		}
 	}
 	
@@ -311,6 +343,10 @@ public class PlayerEventListener {
 		fallDeaths.clear();
 		creeperKillsWithEgg.clear();
 		diamondsMined.clear();
+		activeTime.clear();
+		cannyCatMessages.clear();
+		firstJoinAfterRestart.clear();
+		nightMobKills.clear();
 		if (sessionCount > 0) {
 			LOGGER.info("Завершено {} активных сессий при остановке сервера", sessionCount);
 		}
@@ -372,6 +408,13 @@ public class PlayerEventListener {
 		if (activeSessions.containsKey(uuid)) {
 			// Увеличиваем счетчик отправленных сообщений
 			messagesSent.merge(uuid, 1, Integer::sum);
+			
+			// Проверяем, содержит ли сообщение "cannyCat"
+			String message = event.getRawText();
+			if (message != null && message.toLowerCase().contains("cannycat")) {
+				cannyCatMessages.merge(uuid, 1, Integer::sum);
+			}
+			
 			// Обновляем время последней активности
 			lastActivityTime.put(uuid, System.currentTimeMillis());
 		}
@@ -393,6 +436,7 @@ public class PlayerEventListener {
 		
 		long currentTime = System.currentTimeMillis();
 		Long lastActivity = lastActivityTime.get(uuid);
+		Long sessionStart = activeSessions.get(uuid) != null ? activeSessions.get(uuid).startTime : null;
 		
 		if (lastPos != null && !currentPos.equals(lastPos)) {
 			// Вычисляем количество пройденных блоков
@@ -414,16 +458,47 @@ public class PlayerEventListener {
 			lastPositions.put(uuid, currentPos);
 		}
 		
-		// Проверяем AFK статус
-		if (lastActivity != null) {
+		// Проверяем AFK статус и накапливаем активное время
+		if (lastActivity != null && sessionStart != null) {
 			long timeSinceLastActivity = currentTime - lastActivity;
 			
 			if (timeSinceLastActivity >= AFK_THRESHOLD_MS) {
 				// Игрок в AFK - накапливаем время AFK
 				// Добавляем время одного тика (50ms при 20 TPS)
 				afkTime.merge(uuid, 50L, Long::sum);
+			} else {
+				// Игрок активен - накапливаем активное время
+				// Добавляем время одного тика (50ms при 20 TPS)
+				activeTime.merge(uuid, 50L, Long::sum);
 			}
 		}
+	}
+	
+	private void handleMonsterDeath(LivingDeathEvent event, Monster monster) {
+		DamageSource damageSource = event.getSource();
+		
+		// Проверяем, убил ли игрок монстра
+		if (damageSource.getEntity() instanceof ServerPlayer killer) {
+			UUID killerUuid = killer.getUUID();
+			
+			if (!activeSessions.containsKey(killerUuid)) {
+				return;
+			}
+			
+			// Проверяем, что сейчас ночь
+			Level level = monster.level();
+			if (level != null && isNightTime(level)) {
+				nightMobKills.merge(killerUuid, 1, Integer::sum);
+				// Обновляем время последней активности
+				lastActivityTime.put(killerUuid, System.currentTimeMillis());
+			}
+		}
+	}
+	
+	private boolean isNightTime(Level level) {
+		long dayTime = level.getDayTime();
+		// Ночь в Minecraft: время суток от 13000 до 23000 тиков
+		return dayTime >= 13000 && dayTime < 23000;
 	}
 	
 	/**
@@ -439,13 +514,19 @@ public class PlayerEventListener {
 		Integer fallDeathsCount = fallDeaths.get(uuid);
 		Integer creeperKills = creeperKillsWithEgg.get(uuid);
 		Integer diamonds = diamondsMined.get(uuid);
+		Long active = activeTime.get(uuid);
+		Integer cannyCat = cannyCatMessages.get(uuid);
+		Integer firstJoin = firstJoinAfterRestart.get(uuid);
+		Integer nightKills = nightMobKills.get(uuid);
 		
 		// Проверяем, есть ли хотя бы один счетчик > 0
 		if ((blocks != null && blocks > 0) || (messages != null && messages > 0) || 
 			(afk != null && afk > 0) || (quartz != null && quartz > 0) || 
 			(deepslate != null && deepslate > 0) || (playerKillsCount != null && playerKillsCount > 0) ||
 			(fallDeathsCount != null && fallDeathsCount > 0) || (creeperKills != null && creeperKills > 0) ||
-			(diamonds != null && diamonds > 0)) {
+			(diamonds != null && diamonds > 0) || (active != null && active > 0) ||
+			(cannyCat != null && cannyCat > 0) || (firstJoin != null && firstJoin > 0) ||
+			(nightKills != null && nightKills > 0)) {
 			Map<String, Integer> countersMap = new HashMap<>();
 			
 			if (blocks != null && blocks > 0) {
@@ -483,6 +564,23 @@ public class PlayerEventListener {
 			
 			if (diamonds != null && diamonds > 0) {
 				countersMap.put("diamonds_mined", diamonds);
+			}
+			
+			if (active != null && active > 0) {
+				// Конвертируем миллисекунды в секунды для отправки
+				countersMap.put("active_time", (int)(active / 1000));
+			}
+			
+			if (cannyCat != null && cannyCat > 0) {
+				countersMap.put("canny_cat_messages", cannyCat);
+			}
+			
+			if (firstJoin != null && firstJoin > 0) {
+				countersMap.put("first_join_after_restart", firstJoin);
+			}
+			
+			if (nightKills != null && nightKills > 0) {
+				countersMap.put("night_mob_kills", nightKills);
 			}
 			
 			if (!countersMap.isEmpty()) {
@@ -582,6 +680,43 @@ public class PlayerEventListener {
 			}
 		}
 		
+		// Добавляем active_time
+		for (Map.Entry<UUID, Long> entry : activeTime.entrySet()) {
+			UUID uuid = entry.getKey();
+			Long active = entry.getValue();
+			if (active > 0) {
+				// Конвертируем миллисекунды в секунды для отправки
+				allCounters.computeIfAbsent(uuid, k -> new HashMap<>()).put("active_time", (int)(active / 1000));
+			}
+		}
+		
+		// Добавляем canny_cat_messages
+		for (Map.Entry<UUID, Integer> entry : cannyCatMessages.entrySet()) {
+			UUID uuid = entry.getKey();
+			Integer cannyCat = entry.getValue();
+			if (cannyCat > 0) {
+				allCounters.computeIfAbsent(uuid, k -> new HashMap<>()).put("canny_cat_messages", cannyCat);
+			}
+		}
+		
+		// Добавляем first_join_after_restart
+		for (Map.Entry<UUID, Integer> entry : firstJoinAfterRestart.entrySet()) {
+			UUID uuid = entry.getKey();
+			Integer firstJoin = entry.getValue();
+			if (firstJoin > 0) {
+				allCounters.computeIfAbsent(uuid, k -> new HashMap<>()).put("first_join_after_restart", firstJoin);
+			}
+		}
+		
+		// Добавляем night_mob_kills
+		for (Map.Entry<UUID, Integer> entry : nightMobKills.entrySet()) {
+			UUID uuid = entry.getKey();
+			Integer kills = entry.getValue();
+			if (kills > 0) {
+				allCounters.computeIfAbsent(uuid, k -> new HashMap<>()).put("night_mob_kills", kills);
+			}
+		}
+		
 		// Создаем CounterData для каждого игрока с хотя бы одним счетчиком > 0
 		for (Map.Entry<UUID, Map<String, Integer>> entry : allCounters.entrySet()) {
 			UUID uuid = entry.getKey();
@@ -634,6 +769,22 @@ public class PlayerEventListener {
 		// Сбрасываем счетчики добытых алмазов
 		for (UUID uuid : diamondsMined.keySet()) {
 			diamondsMined.put(uuid, 0);
+		}
+		// Сбрасываем счетчики активного времени
+		for (UUID uuid : activeTime.keySet()) {
+			activeTime.put(uuid, 0L);
+		}
+		// Сбрасываем счетчики сообщений с cannyCat
+		for (UUID uuid : cannyCatMessages.keySet()) {
+			cannyCatMessages.put(uuid, 0);
+		}
+		// Сбрасываем счетчики первого входа после перезапуска
+		for (UUID uuid : firstJoinAfterRestart.keySet()) {
+			firstJoinAfterRestart.put(uuid, 0);
+		}
+		// Сбрасываем счетчики убийств монстров ночью
+		for (UUID uuid : nightMobKills.keySet()) {
+			nightMobKills.put(uuid, 0);
 		}
 	}
 	

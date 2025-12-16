@@ -37,6 +37,10 @@ public class ServerEventListener {
 	public void onServerStarting(ServerStartingEvent event) {
 		MinecraftServer server = event.getServer();
 		
+		// Устанавливаем флаг первого входа после перезапуска
+		// Это будет сброшено после первого входа игрока
+		com.example.polystirolstats.neoforge.events.PlayerEventListener.setFirstJoinAfterRestart(true);
+		
 		// Отправляем данные сервера
 		ServerData serverData = new ServerData();
 		serverData.setServerUuid(serverUuid);
