@@ -30,6 +30,11 @@ public class PlayerEventListener {
 	private final Map<UUID, BlockPos> lastPositions = new ConcurrentHashMap<>();
 	private final Map<UUID, Integer> blocksTraveled = new ConcurrentHashMap<>();
 	private final Map<UUID, Integer> messagesSent = new ConcurrentHashMap<>();
+	private final Map<UUID, Long> lastActivityTime = new ConcurrentHashMap<>();
+	private final Map<UUID, Long> afkTime = new ConcurrentHashMap<>();
+	
+	// Порог AFK: 5 минут без активности (в миллисекундах)
+	private static final long AFK_THRESHOLD_MS = 5 * 60 * 1000L;
 	
 	public PlayerEventListener(StatisticsCollector collector, String serverUuid, WorldIdMapper worldIdMapper) {
 		this.collector = collector;
@@ -81,6 +86,8 @@ public class PlayerEventListener {
 		lastPositions.put(uuid, player.blockPosition());
 		blocksTraveled.put(uuid, 0);
 		messagesSent.put(uuid, 0);
+		lastActivityTime.put(uuid, now);
+		afkTime.put(uuid, 0L);
 		
 		// Добавляем никнейм
 		NicknameData nickname = new NicknameData();
@@ -120,6 +127,8 @@ public class PlayerEventListener {
 		lastPositions.remove(uuid);
 		blocksTraveled.remove(uuid);
 		messagesSent.remove(uuid);
+		lastActivityTime.remove(uuid);
+		afkTime.remove(uuid);
 		
 		if (session != null) {
 			// Завершаем сессию
@@ -215,6 +224,8 @@ public class PlayerEventListener {
 		lastPositions.clear();
 		blocksTraveled.clear();
 		messagesSent.clear();
+		lastActivityTime.clear();
+		afkTime.clear();
 		if (sessionCount > 0) {
 			LOGGER.info("Завершено {} активных сессий при остановке сервера", sessionCount);
 		}
@@ -231,6 +242,8 @@ public class PlayerEventListener {
 		if (activeSessions.containsKey(uuid)) {
 			// Увеличиваем счетчик отправленных сообщений
 			messagesSent.merge(uuid, 1, Integer::sum);
+			// Обновляем время последней активности
+			lastActivityTime.put(uuid, System.currentTimeMillis());
 		}
 	}
 	
@@ -248,6 +261,9 @@ public class PlayerEventListener {
 		BlockPos currentPos = player.blockPosition();
 		BlockPos lastPos = lastPositions.get(uuid);
 		
+		long currentTime = System.currentTimeMillis();
+		Long lastActivity = lastActivityTime.get(uuid);
+		
 		if (lastPos != null && !currentPos.equals(lastPos)) {
 			// Вычисляем количество пройденных блоков
 			int dx = Math.abs(currentPos.getX() - lastPos.getX());
@@ -260,9 +276,23 @@ public class PlayerEventListener {
 			
 			// Обновляем последнюю позицию
 			lastPositions.put(uuid, currentPos);
+			
+			// Обновляем время последней активности при движении
+			lastActivityTime.put(uuid, currentTime);
 		} else if (lastPos == null) {
 			// Инициализируем позицию, если её еще нет
 			lastPositions.put(uuid, currentPos);
+		}
+		
+		// Проверяем AFK статус
+		if (lastActivity != null) {
+			long timeSinceLastActivity = currentTime - lastActivity;
+			
+			if (timeSinceLastActivity >= AFK_THRESHOLD_MS) {
+				// Игрок в AFK - накапливаем время AFK
+				// Добавляем время одного тика (50ms при 20 TPS)
+				afkTime.merge(uuid, 50L, Long::sum);
+			}
 		}
 	}
 	
@@ -272,9 +302,10 @@ public class PlayerEventListener {
 	private void collectPlayerCounters(UUID uuid) {
 		Integer blocks = blocksTraveled.get(uuid);
 		Integer messages = messagesSent.get(uuid);
+		Long afk = afkTime.get(uuid);
 		
 		// Проверяем, есть ли хотя бы один счетчик > 0
-		if ((blocks != null && blocks > 0) || (messages != null && messages > 0)) {
+		if ((blocks != null && blocks > 0) || (messages != null && messages > 0) || (afk != null && afk > 0)) {
 			Map<String, Integer> countersMap = new HashMap<>();
 			
 			if (blocks != null && blocks > 0) {
@@ -283,6 +314,11 @@ public class PlayerEventListener {
 			
 			if (messages != null && messages > 0) {
 				countersMap.put("messages_sent", messages);
+			}
+			
+			if (afk != null && afk > 0) {
+				// Конвертируем миллисекунды в секунды для отправки
+				countersMap.put("afk_time", (int)(afk / 1000));
 			}
 			
 			if (!countersMap.isEmpty()) {
@@ -297,7 +333,7 @@ public class PlayerEventListener {
 	}
 	
 	public void collectAndSendCounters() {
-		// Объединяем все UUID из обоих счетчиков
+		// Объединяем все UUID из всех счетчиков
 		Map<UUID, Map<String, Integer>> allCounters = new HashMap<>();
 		
 		// Добавляем blocks_traveled
@@ -315,6 +351,16 @@ public class PlayerEventListener {
 			Integer messages = entry.getValue();
 			if (messages > 0) {
 				allCounters.computeIfAbsent(uuid, k -> new HashMap<>()).put("messages_sent", messages);
+			}
+		}
+		
+		// Добавляем afk_time
+		for (Map.Entry<UUID, Long> entry : afkTime.entrySet()) {
+			UUID uuid = entry.getKey();
+			Long afk = entry.getValue();
+			if (afk > 0) {
+				// Конвертируем миллисекунды в секунды для отправки
+				allCounters.computeIfAbsent(uuid, k -> new HashMap<>()).put("afk_time", (int)(afk / 1000));
 			}
 		}
 		
@@ -342,6 +388,10 @@ public class PlayerEventListener {
 		// Сбрасываем счетчики отправленных сообщений
 		for (UUID uuid : messagesSent.keySet()) {
 			messagesSent.put(uuid, 0);
+		}
+		// Сбрасываем счетчики AFK времени
+		for (UUID uuid : afkTime.keySet()) {
+			afkTime.put(uuid, 0L);
 		}
 	}
 	
