@@ -12,6 +12,7 @@ import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.damagesource.DamageTypes;
 import net.minecraft.world.entity.monster.Creeper;
 import net.minecraft.world.entity.monster.Monster;
+import net.minecraft.world.entity.projectile.ThrownEgg;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.Level;
@@ -275,28 +276,17 @@ public class PlayerEventListener {
 	private void handleCreeperDeath(LivingDeathEvent event, Creeper creeper) {
 		DamageSource damageSource = event.getSource();
 		
-		// Проверяем, убил ли игрок крипера куриным яйцом
-		if (damageSource.getEntity() instanceof ServerPlayer killer) {
-			UUID killerUuid = killer.getUUID();
-			
-			// Проверяем, что в руке у игрока куриное яйцо
-			boolean killedWithEgg = false;
-			if (killer.getMainHandItem() != null && !killer.getMainHandItem().isEmpty()) {
-				if (killer.getMainHandItem().is(Items.EGG)) {
-					killedWithEgg = true;
+		// Проверяем, что урон нанесен именно брошенным яйцом
+		if (damageSource.getDirectEntity() instanceof ThrownEgg thrownEgg) {
+			// Получаем владельца яйца (игрока, который его бросил)
+			if (thrownEgg.getOwner() instanceof ServerPlayer killer) {
+				UUID killerUuid = killer.getUUID();
+				
+				if (activeSessions.containsKey(killerUuid)) {
+					creeperKillsWithEgg.merge(killerUuid, 1, Integer::sum);
+					// Обновляем время последней активности
+					lastActivityTime.put(killerUuid, System.currentTimeMillis());
 				}
-			}
-			// Также проверяем вторую руку
-			if (!killedWithEgg && killer.getOffhandItem() != null && !killer.getOffhandItem().isEmpty()) {
-				if (killer.getOffhandItem().is(Items.EGG)) {
-					killedWithEgg = true;
-				}
-			}
-			
-			if (killedWithEgg && activeSessions.containsKey(killerUuid)) {
-				creeperKillsWithEgg.merge(killerUuid, 1, Integer::sum);
-				// Обновляем время последней активности
-				lastActivityTime.put(killerUuid, System.currentTimeMillis());
 			}
 		}
 	}
@@ -409,10 +399,14 @@ public class PlayerEventListener {
 			// Увеличиваем счетчик отправленных сообщений
 			messagesSent.merge(uuid, 1, Integer::sum);
 			
-			// Проверяем, содержит ли сообщение "cannyCat"
+			// Проверяем, содержит ли сообщение "cannyCat" или ":cannyCat:"
 			String message = event.getRawText();
-			if (message != null && message.toLowerCase().contains("cannycat")) {
-				cannyCatMessages.merge(uuid, 1, Integer::sum);
+			if (message != null) {
+				String messageLower = message.toLowerCase();
+				// Проверяем как "cannycat", так и ":cannycat:" (эмодзи/смайлик)
+				if (messageLower.contains("cannycat") || messageLower.contains(":cannycat:")) {
+					cannyCatMessages.merge(uuid, 1, Integer::sum);
+				}
 			}
 			
 			// Обновляем время последней активности
